@@ -1,0 +1,8 @@
+{
+  "githubUsername": "your-github-username",
+  "trelloBoard": "https://trello.com/b/YOUR_BOARD_ID/your-board-name",
+  "constants": {
+    "daysUntilClient": "N/A",
+    "joinedScrum": "❌"
+  }
+}
