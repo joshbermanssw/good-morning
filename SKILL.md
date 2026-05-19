@@ -99,9 +99,25 @@ Also drop any review-only PR whose `author` equals `$USER` — defensive against
 For each surviving item (anything not dropped by Step 3.1), fetch body + last 3 comments. Dispatch ALL fetches concurrently in a single message using parallel Bash invocations.
 
 ```
-gh api repos/{repo}/issues/{number} --jq '{body, html_url}'
+gh api repos/{repo}/issues/{number} --jq '{body, html_url, created_at}'
 gh api repos/{repo}/issues/{number}/comments?per_page=100 --jq '[.[-3:][] | {user: .user.login, body, created_at}]'
 ```
+
+Also capture `created_at` on the item itself — it's needed for the `new` vs `carryover` bucket decision in Step 3.5 (GitHub's search APIs return `updatedAt` but not `createdAt`, so this fetch is the source of truth).
+
+### Step 3.3 — Detect issue↔PR fix links
+
+After bodies are fetched, scan each PR body for `Fixes #N`, `Closes #N`, `Resolves #N`, or full `Fixes owner/repo#N` URLs/forms. Build a map: `fixedIssue → fixingPR`.
+
+For any open issue in the list that has a fixing PR also in the list:
+- Override the issue's later-computed status to match the PR's state: if the PR is open → issue status becomes `👀 In review`; if merged → `✅ Done`.
+- Suppress any auto-generated `nextStep` like "fixed by #N, awaiting merge" — the linked PR appears in the listing already, so the sub-line is redundant.
+
+### Step 3.4 — Flag PR-pair candidates for consolidation
+
+Sometimes a PR is closed-without-merge in one repo and the real fix lands as a new PR in a different repo (e.g. a workaround PR closed in favor of an upstream patch). Detect candidate pairs: a closed-no-merge PR by the user, and a merged-or-open PR (authored or reviewed) in a different repo, both updated within ±2 days, with overlapping keywords in titles/bodies (≥ 2 shared distinctive tokens, ignoring stopwords).
+
+Do NOT auto-merge them. Instead, attach a `consolidationHint: "candidate pair with {other}"` to both items so Step 8 can surface the suggestion: `Detected possible consolidation: #X (closed) + #Y (fix) — merge into one human-readable line? (y/n/edit text)`.
 
 ## Step 3.5 — Classify each item (parallel Haiku subagents)
 
@@ -125,10 +141,10 @@ Last 3 comments:
 Decide:
 1. bucket — one of:
    - "old": work that is now DONE/CLOSED (merged PR, closed issue). Goes in Yesterday only. Use this whenever merged_at or closed_at is non-null, regardless of whether it was opened the same day.
-   - "new": a PR or issue that is still OPEN and was first created in the window. Goes in Today only.
-   - "carryover": a PR or issue that is still OPEN and predates the window OR was opened in the window but not yet resolved. Goes in both Yesterday and Today.
+   - "new": a PR or issue that is still OPEN, was first created in the window, AND the user has NOT taken any further action on it (no commits, no own-comments, no review activity after the initial creation). Goes in Today only. Rare bucket — usually opened-and-touched items belong in "carryover".
+   - "carryover": a PR or issue that is still OPEN and either (a) predates the window, OR (b) was opened in the window AND the user did meaningful work on it (commented, pushed commits, requested review, marked blocked). Goes in both Yesterday and Today. This is the DEFAULT for open items the user actively touched.
 
-   Key rule: if merged_at is non-null → bucket = "old". If state is open → "new" if created_at falls within {start}..{end}; "carryover" if created_at is before {start} (item predates the window but is still in flight).
+   Key rule: if merged_at is non-null → bucket = "old". If state is open → "carryover" if there's any user activity beyond creation (own comments by `@{githubUsername}` in the comments list, or PR has commits/pushes in the window). "new" only if the item is open, was just created, and shows no further activity by the user.
 
 2. status — pick the {emoji, text} pair that matches. "Done" covers any work Josh completed (his own merged PRs AND closed issues). The "Reviewed" label is applied later in rendering ONLY for items Josh did not author:
    - merged PR (item is a PR AND merged_at non-null) → emoji ✅, text "Done"
@@ -138,7 +154,7 @@ Decide:
    - open issue + assigned + activity in window → emoji 🚧, text "In progress"
    - open issue + assigned, no activity in window → emoji ⚒️, text "TODO"
 
-3. nextStep — IF the body or comments mention an explicit follow-up the user should do next (e.g. "needs review from X", "waiting on Y", "follow-up PBI #123", "blocked on Z"), include it as one short sentence. Otherwise null. Do NOT invent next steps.
+3. nextStep — IF the body or comments mention an explicit follow-up the user should do next (e.g. "needs review from X", "waiting on Y", "follow-up PBI #123", "blocked on Z"), include it as one short sentence. Otherwise null. Do NOT invent next steps. Do NOT generate "Fixed by #N, awaiting merge" style next-steps when the fixing PR is itself in the listing — Step 3.3 already suppresses these as redundant.
 
 Output exactly:
 {"bucket": "...", "status": {"emoji": "...", "text": "..."}, "nextStep": "..." | null}
@@ -163,6 +179,13 @@ Include every item whose `classification.bucket` is `old` or `carryover`. Render
 **Review-only override:** if `item.reviewOnly === true` (from Step 3.1), replace `{classification.status.text}` with the literal `Reviewed` regardless of what the classifier returned. The emoji still reflects state (✅ for merged, 👀 for open). Example: `👀 Reviewed - <title> #N` for an open PR Josh only reviewed, `✅ Reviewed - <title> #N` for a merged one.
 
 If `classification.nextStep` is non-null, emit it on an indented next line beneath the item.
+
+**Free-form items** (added via Step 8 nudges) render exactly like GitHub items but without a `#N` suffix. They may have an optional sub-line for extra context (also indented two spaces). Example:
+```
+✅ Done - Migrate SSW Rules over to use the new separate content repo setup
+  Setup 2 PRs for SSW Rules and SSW Rules Content for simplifying repos
+```
+Free-form items live under whichever repo heading the user assigns them to during Step 8, or under a final `Other:` block (see Step 7).
 
 Group layout:
 
@@ -208,9 +231,22 @@ Today
 
 {today_groups}
 
+{optional_other_block}
 ```
 
 If `$INBOX` is blank (user said skip), omit the "I have N emails in my inbox" line. If today section was skipped, drop the entire "Today" block and the preceding blank line. No signature — Outlook appends its own.
+
+### Optional "Other:" block
+
+If the Step 8 nudges surfaced items that don't belong under any repo (meetings, comms challenges, cross-repo investigations not tied to a single PR), append a final block after Today:
+
+```
+  Other:
+      💬 Comms challenge
+      🧠 SSW comms training session
+```
+
+`Other:` is indented two spaces (less than repo headings, signaling it's at a different level). Items beneath get six-space indent to match the repo-item pattern. Use icons like 💬 for comms, 🧠 for training, 📞 for calls, ☕ for 1:1s — pick what fits.
 
 ### Step 7.1 — Also build the HTML version for rich clipboard paste
 
@@ -244,6 +280,9 @@ Rules:
 - Every bare URL (Trello link, etc.) becomes `<a href="X">X</a>`
 - Emojis stay as literal UTF-8 characters
 - Preserve any nextStep indented context lines with `&nbsp;&nbsp;` prefix
+- Escape literal `<` and `>` inside titles as `&lt;` and `&gt;` (e.g. titles like `🐛 Fix <mark> highlight...` must become `🐛 Fix &lt;mark&gt; highlight...` in HTML, otherwise the browser interprets them as broken tags)
+- Free-form items render the same as GitHub items minus the `<a>` for `#N`. Their optional sub-line uses `&nbsp;&nbsp;` prefix like a nextStep.
+- The `Other:` block uses `&nbsp;&nbsp;Other:` for the header and `&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;` prefix for items beneath it.
 
 Store as `$EMAIL_HTML`. Also build `$YESTERDAY_HTML` containing just the header block + Yesterday section (for the second clipboard copy in Step 9).
 
@@ -253,11 +292,43 @@ Print the assembled email body in a fenced code block. Then ask: `Edits? (or "sh
 
 Loop on conversational edits:
 - "tighten item 3" / "drop the YakShaver section" / "add a TODO line about X" → regenerate the relevant section, reprint full email, re-ask.
-- Anything matching "ship it" / "looks good" / "send" / "yes" → proceed to Step 9.
+- Anything matching "ship it" / "looks good" / "send" / "yes" / "copy it" → proceed to Step 9.
 
-Also nudge once after the first draft: `Anything you worked on yesterday that's not in GitHub yet? (e.g. TimePro sprint summary, CTF review)`. Apply any additions to the Yesterday section.
+### Step 8.1 — Non-GitHub nudge (mandatory, structured)
 
-If Step 3 produced zero items, render Yesterday as: `Nothing logged in GitHub yesterday — was I off / in meetings? (tell me what to add)` and skip the nudge.
+GitHub captures only a fraction of Josh's actual work. The first draft almost always misses 3–6 items. After printing the first draft, ALWAYS ask this structured prompt verbatim:
+
+```
+What did you do yesterday that GitHub doesn't show? Common categories — answer any that apply:
+  • Investigations or debugging not tied to a PR (e.g. "looked into X with @Y")
+  • Code reviews of teammates' PRs (give names + count, e.g. "reviewed 2 of Chloe's PRs")
+  • Migrations or setup work spanning multiple repos (give a one-line summary + sub-line for detail)
+  • Meetings, 1:1s, training, comms challenges
+  • Anything for today's plan that isn't in GitHub yet (bugs to investigate, follow-ups, calls)
+
+Reply with bullets or paste a list. "none" to skip.
+```
+
+Apply additions to the appropriate section/repo. Free-form items go under the repo they relate to (e.g. an investigation about tinacloud goes under `tinacloud:`); items without a clear repo home go in the final `Other:` block.
+
+### Step 8.2 — Consolidation prompts
+
+If Step 3.4 attached any `consolidationHint`s, ask for each pair BEFORE the non-GitHub nudge:
+
+```
+Detected possible consolidation:
+  ❌ Closed - {title A} #{numA}
+  ✅ Reviewed - {title B} #{numB}
+Merge into one human-readable line? (y / n / type replacement text)
+```
+
+If `y`, replace both with a single `✅ Done - <human summary>` line under whichever repo makes sense (usually the one where the actual work landed, or where it was originally scoped). Drop the `#N` suffixes since the consolidated line covers both.
+
+### Step 8.3 — Reprint after edits
+
+After ANY edit (manual, nudge response, or consolidation), reprint the FULL email and re-ask `Edits? (or "ship it")`. Don't proceed to clipboard until the user explicitly approves.
+
+If Step 3 produced zero items, render Yesterday as: `Nothing logged in GitHub yesterday — was I off / in meetings? (tell me what to add)` and still run Step 8.1 nudge.
 
 ## Step 9 — Two-stage clipboard handoff (rich HTML)
 
