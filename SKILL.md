@@ -180,21 +180,22 @@ Include every item whose `classification.bucket` is `old` or `carryover`. Render
 
 If `classification.nextStep` is non-null, emit it on an indented next line beneath the item.
 
-**Free-form items** (added via Step 8 nudges) render exactly like GitHub items but without a `#N` suffix. They may have an optional sub-line for extra context (also indented two spaces). Example:
+**Free-form items** (added via Step 8 nudges) render exactly like GitHub items but without a `#N` suffix. They may have an optional sub-line for extra context (indented two spaces beyond the item). Example:
 ```
-✅ Done - Migrate SSW Rules over to use the new separate content repo setup
-  Setup 2 PRs for SSW Rules and SSW Rules Content for simplifying repos
+tinacloud:
+      ✅ Done - Migrate SSW Rules over to use the new separate content repo setup
+        Setup 2 PRs for SSW Rules and SSW Rules Content for simplifying repos
 ```
 Free-form items live under whichever repo heading the user assigns them to during Step 8, or under a final `Other:` block (see Step 7).
 
 Group layout:
 
 ```
-      <RepoHeading>:
-<item lines>
+<RepoHeading>:
+      <item lines>
 ```
 
-(Six leading spaces before the heading. Items flush-left under it.)
+(Repo heading flush-left. Items get six leading spaces. NextStep / sub-lines get eight spaces — two beyond their parent item.)
 
 ## Step 6 — Render the Today section
 
@@ -241,12 +242,12 @@ If `$INBOX` is blank (user said skip), omit the "I have N emails in my inbox" li
 If the Step 8 nudges surfaced items that don't belong under any repo (meetings, comms challenges, cross-repo investigations not tied to a single PR), append a final block after Today:
 
 ```
-  Other:
+Other:
       💬 Comms challenge
       🧠 SSW comms training session
 ```
 
-`Other:` is indented two spaces (less than repo headings, signaling it's at a different level). Items beneath get six-space indent to match the repo-item pattern. Use icons like 💬 for comms, 🧠 for training, 📞 for calls, ☕ for 1:1s — pick what fits.
+`Other:` is flush-left like repo headings; items beneath get the same six-space indent as repo items. Use icons like 💬 for comms, 🧠 for training, 📞 for calls, ☕ for 1:1s — pick what fits.
 
 ### Step 7.1 — Also build the HTML version for rich clipboard paste
 
@@ -266,8 +267,8 @@ HTML structure (keep it minimal — Outlook is picky):
 <div>&nbsp;</div>
 <div>Yesterday</div>
 <div>&nbsp;</div>
-<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;tina.io:</div>
-<div>✅ Done - 🐛 Fix Release Notes auto-merge permission error <a href="https://github.com/tinacms/tina.io/pull/4541">#4541</a></div>
+<div>tina.io:</div>
+<div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;✅ Done - 🐛 Fix Release Notes auto-merge permission error <a href="https://github.com/tinacms/tina.io/pull/4541">#4541</a></div>
 ... etc ...
 </body></html>
 ```
@@ -275,14 +276,15 @@ HTML structure (keep it minimal — Outlook is picky):
 Rules:
 - One `<div>` per line of the plain text version
 - Blank lines become `<div>&nbsp;</div>`
-- The 6-space repo heading indent uses `&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`
+- Repo headings are flush-left (no leading `&nbsp;`)
+- Items under a repo heading get a 6-`&nbsp;` indent prefix
+- NextStep / sub-lines get an 8-`&nbsp;` indent prefix (two beyond their parent item)
 - Every `#N` becomes `<a href="{item.url}">#N</a>` using the item's `html_url` from Step 3
 - Every bare URL (Trello link, etc.) becomes `<a href="X">X</a>`
 - Emojis stay as literal UTF-8 characters
-- Preserve any nextStep indented context lines with `&nbsp;&nbsp;` prefix
 - Escape literal `<` and `>` inside titles as `&lt;` and `&gt;` (e.g. titles like `🐛 Fix <mark> highlight...` must become `🐛 Fix &lt;mark&gt; highlight...` in HTML, otherwise the browser interprets them as broken tags)
-- Free-form items render the same as GitHub items minus the `<a>` for `#N`. Their optional sub-line uses `&nbsp;&nbsp;` prefix like a nextStep.
-- The `Other:` block uses `&nbsp;&nbsp;Other:` for the header and `&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;` prefix for items beneath it.
+- Free-form items render the same as GitHub items minus the `<a>` for `#N`. Their optional sub-line uses the same 8-`&nbsp;` prefix as a nextStep.
+- The `Other:` block uses flush-left `<div>Other:</div>` for the header and 6-`&nbsp;` prefix for items beneath it.
 
 Store as `$EMAIL_HTML`. Also build `$YESTERDAY_HTML` containing just the header block + Yesterday section (for the second clipboard copy in Step 9).
 
